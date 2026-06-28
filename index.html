@@ -1,0 +1,541 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>WebCompiler – Hide Source Code</title>
+  <!-- Bootstrap 5 + Icons -->
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.5/font/bootstrap-icons.css">
+  <!-- Firebase Compat SDKs -->
+  <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-auth-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-database-compat.js"></script>
+  <style>
+    :root {
+      --gradient-start: #667eea;
+      --gradient-end: #764ba2;
+    }
+    body {
+      background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
+      min-height: 100vh;
+      font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+    }
+    .navbar-brand {
+      font-weight: 700;
+      letter-spacing: -0.5px;
+    }
+    .card {
+      border: none;
+      border-radius: 1.5rem;
+      box-shadow: 0 20px 40px rgba(0,0,0,0.08);
+      backdrop-filter: blur(10px);
+      background: rgba(255,255,255,0.85);
+    }
+    .btn-primary {
+      background: linear-gradient(135deg, var(--gradient-start), var(--gradient-end));
+      border: none;
+      border-radius: 50px;
+      padding: 0.6rem 1.8rem;
+      font-weight: 600;
+      transition: all 0.3s ease;
+    }
+    .btn-primary:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 10px 20px rgba(102, 126, 234, 0.4);
+    }
+    .btn-outline-primary {
+      border-radius: 50px;
+      border: 2px solid var(--gradient-start);
+      color: var(--gradient-start);
+      font-weight: 600;
+      transition: all 0.3s;
+    }
+    .btn-outline-primary:hover {
+      background: var(--gradient-start);
+      color: white;
+    }
+    .link-item {
+      background: white;
+      border-radius: 1rem;
+      padding: 1rem;
+      margin-bottom: 1rem;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.05);
+      transition: all 0.2s;
+    }
+    .link-item:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 12px 24px rgba(0,0,0,0.1);
+    }
+    .compiled-url {
+      word-break: break-all;
+      background: #f8f9fa;
+      padding: 0.4rem 0.8rem;
+      border-radius: 8px;
+      font-family: monospace;
+      font-size: 0.9rem;
+    }
+    .spinner-overlay {
+      position: fixed;
+      top: 0; left: 0; width: 100%; height: 100%;
+      background: rgba(255,255,255,0.8);
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      z-index: 9999;
+    }
+    @media (max-width: 576px) {
+      .card { border-radius: 1rem; }
+    }
+  </style>
+</head>
+<body>
+  <!-- Navbar -->
+  <nav class="navbar navbar-expand-lg navbar-light bg-white shadow-sm sticky-top">
+    <div class="container">
+      <a class="navbar-brand" href="#">
+        <i class="bi bi-shield-lock-fill me-2" style="color: var(--gradient-start);"></i>WebCompiler
+      </a>
+      <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
+        <span class="navbar-toggler-icon"></span>
+      </button>
+      <div class="collapse navbar-collapse" id="navbarNav">
+        <ul class="navbar-nav ms-auto" id="navLinks">
+          <!-- filled by JS -->
+        </ul>
+      </div>
+    </div>
+  </nav>
+
+  <!-- Main Content -->
+  <div class="container py-4" id="mainContainer">
+    <!-- Dynamic views inserted here -->
+  </div>
+
+  <!-- Loading overlay (hidden by default) -->
+  <div id="loadingOverlay" class="spinner-overlay" style="display: none;">
+    <div class="text-center">
+      <div class="spinner-border text-primary" role="status" style="width: 3rem; height: 3rem;"></div>
+      <p class="mt-2 fw-bold">Compiling website...</p>
+    </div>
+  </div>
+
+  <script>
+    // ==================== FIREBASE CONFIG ====================
+    // Replace with your own Firebase config object
+    const firebaseConfig = {
+  apiKey: "AIzaSyD5UusJH8TMik5twPoePCZZV4MbHvQdx6g",
+  authDomain: "webcompiler-906f5.firebaseapp.com",
+  databaseURL: "https://webcompiler-906f5-default-rtdb.firebaseio.com",
+  projectId: "webcompiler-906f5",
+  storageBucket: "webcompiler-906f5.firebasestorage.app",
+  messagingSenderId: "358644190197",
+  appId: "1:358644190197:web:4187a29e3366433c316ebc"
+};
+    // ========================================================
+    firebase.initializeApp(firebaseConfig);
+    const auth = firebase.auth();
+    const db = firebase.database();
+
+    // ==================== GLOBAL STATE & ROUTER ====================
+    let currentUser = null;
+    const mainContainer = document.getElementById('mainContainer');
+    const navLinks = document.getElementById('navLinks');
+    const loadingOverlay = document.getElementById('loadingOverlay');
+
+    // Simple hash router
+    window.addEventListener('hashchange', handleRouting);
+    window.addEventListener('load', handleRouting);
+
+    // Auth state observer
+    auth.onAuthStateChanged(user => {
+      currentUser = user;
+      updateNav();
+      handleRouting(); // re‑render after auth state change
+    });
+
+    function showLoading(show) {
+      loadingOverlay.style.display = show ? 'flex' : 'none';
+    }
+
+    // ==================== NAVIGATION BAR ====================
+    function updateNav() {
+      if (currentUser) {
+        navLinks.innerHTML = `
+          <li class="nav-item"><a class="nav-link" href="#/dashboard"><i class="bi bi-speedometer2 me-1"></i>Dashboard</a></li>
+          <li class="nav-item"><span class="nav-link text-muted">${currentUser.email}</span></li>
+          <li class="nav-item"><button class="btn btn-outline-primary btn-sm ms-2" id="logoutBtn">Logout</button></li>
+        `;
+        document.getElementById('logoutBtn')?.addEventListener('click', logout);
+      } else {
+        navLinks.innerHTML = `
+          <li class="nav-item"><a class="nav-link" href="#/login"><i class="bi bi-box-arrow-in-right me-1"></i>Login</a></li>
+          <li class="nav-item"><a class="nav-link" href="#/signup"><i class="bi bi-person-plus me-1"></i>Sign Up</a></li>
+        `;
+      }
+    }
+
+    async function logout() {
+      await auth.signOut();
+      window.location.hash = '#/';
+    }
+
+    // ==================== ROUTING ====================
+    function handleRouting() {
+      const hash = window.location.hash.slice(1) || '/'; // remove #
+      // Special view route: /view/:id
+      if (hash.startsWith('/view/')) {
+        const siteId = hash.split('/view/')[1];
+        if (siteId) {
+          renderViewPage(siteId);
+          return;
+        }
+      }
+
+      // Normal routes
+      switch (hash) {
+        case '/login':
+          renderLogin();
+          break;
+        case '/signup':
+          renderSignup();
+          break;
+        case '/dashboard':
+          if (!currentUser) {
+            window.location.hash = '#/login';
+            return;
+          }
+          renderDashboard();
+          break;
+        default:
+          renderHome();
+      }
+    }
+
+    // ==================== VIEW PAGES ====================
+    function renderHome() {
+      mainContainer.innerHTML = `
+        <div class="row justify-content-center mt-5">
+          <div class="col-lg-8 text-center">
+            <div class="card p-5">
+              <i class="bi bi-code-slash display-1" style="color: var(--gradient-start);"></i>
+              <h1 class="display-5 fw-bold mt-3">Hide Your Website Source</h1>
+              <p class="lead text-muted">Compile any URL into a protected version where the raw HTML is invisible to casual viewers.</p>
+              <div class="mt-4">
+                <a href="#/signup" class="btn btn-primary btn-lg me-2">Get Started</a>
+                <a href="#/login" class="btn btn-outline-primary btn-lg">Login</a>
+              </div>
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    function renderLogin() {
+      if (currentUser) { window.location.hash = '#/dashboard'; return; }
+      mainContainer.innerHTML = `
+        <div class="row justify-content-center mt-4">
+          <div class="col-md-6 col-lg-5">
+            <div class="card p-4">
+              <h3 class="mb-3 text-center"><i class="bi bi-box-arrow-in-right me-2"></i>Login</h3>
+              <form id="loginForm">
+                <div class="mb-3">
+                  <label class="form-label">Email</label>
+                  <input type="email" class="form-control" id="loginEmail" required>
+                </div>
+                <div class="mb-3">
+                  <label class="form-label">Password</label>
+                  <input type="password" class="form-control" id="loginPassword" required>
+                </div>
+                <button type="submit" class="btn btn-primary w-100">Login</button>
+              </form>
+              <div class="mt-3 text-center">
+                <a href="#" id="forgotPasswordLink" class="text-decoration-none">Forgot password?</a>
+                <br>
+                <span class="text-muted">No account? <a href="#/signup">Sign up</a></span>
+              </div>
+              <div id="loginMessage" class="mt-2 text-center"></div>
+            </div>
+          </div>
+        </div>
+      `;
+
+      document.getElementById('loginForm').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const email = document.getElementById('loginEmail').value.trim();
+        const password = document.getElementById('loginPassword').value;
+        const msgDiv = document.getElementById('loginMessage');
+        try {
+          const userCred = await auth.signInWithEmailAndPassword(email, password);
+          if (!userCred.user.emailVerified) {
+            msgDiv.innerHTML = `<div class="alert alert-warning">Email not verified. <button class="btn btn-sm btn-link" id="resendVerifyBtn">Resend verification</button></div>`;
+            document.getElementById('resendVerifyBtn').addEventListener('click', () => sendVerificationEmail(userCred.user));
+            await auth.signOut(); // force them to verify first
+          } else {
+            window.location.hash = '#/dashboard';
+          }
+        } catch (err) {
+          msgDiv.innerHTML = `<div class="alert alert-danger">${err.message}</div>`;
+        }
+      });
+
+      document.getElementById('forgotPasswordLink').addEventListener('click', (e) => {
+        e.preventDefault();
+        const email = prompt("Enter your email to reset password:");
+        if (email) {
+          auth.sendPasswordResetEmail(email.trim())
+            .then(() => alert('Password reset email sent! Check your inbox.'))
+            .catch(err => alert(err.message));
+        }
+      });
+    }
+
+    function renderSignup() {
+      if (currentUser) { window.location.hash = '#/dashboard'; return; }
+      mainContainer.innerHTML = `
+        <div class="row justify-content-center mt-4">
+          <div class="col-md-6 col-lg-5">
+            <div class="card p-4">
+              <h3 class="mb-3 text-center"><i class="bi bi-person-plus me-2"></i>Create Account</h3>
+              <form id="signupForm">
+                <div class="mb-3">
+                  <label class="form-label">Email</label>
+                  <input type="email" class="form-control" id="signupEmail" required>
+                </div>
+                <div class="mb-3">
+                  <label class="form-label">Password</label>
+                  <input type="password" class="form-control" id="signupPassword" minlength="6" required>
+                </div>
+                <button type="submit" class="btn btn-primary w-100">Sign Up</button>
+              </form>
+              <div class="mt-3 text-center">
+                <span class="text-muted">Already have an account? <a href="#/login">Login</a></span>
+              </div>
+              <div id="signupMessage" class="mt-2 text-center"></div>
+            </div>
+          </div>
+        </div>
+      `;
+
+      document.getElementById('signupForm').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const email = document.getElementById('signupEmail').value.trim();
+        const password = document.getElementById('signupPassword').value;
+        const msgDiv = document.getElementById('signupMessage');
+        try {
+          const userCred = await auth.createUserWithEmailAndPassword(email, password);
+          await sendVerificationEmail(userCred.user);
+          msgDiv.innerHTML = `<div class="alert alert-success">Account created! Verification email sent to ${email}. Please verify before logging in.</div>`;
+          document.getElementById('signupForm').reset();
+        } catch (err) {
+          msgDiv.innerHTML = `<div class="alert alert-danger">${err.message}</div>`;
+        }
+      });
+    }
+
+    async function sendVerificationEmail(user) {
+      try {
+        await user.sendEmailVerification();
+      } catch (err) {
+        alert('Error sending verification: ' + err.message);
+      }
+    }
+
+    // ==================== DASHBOARD ====================
+    function renderDashboard() {
+      if (!currentUser) return;
+      mainContainer.innerHTML = `
+        <div class="row mb-4">
+          <div class="col">
+            <h2><i class="bi bi-speedometer2 me-2"></i>Your Compiled Links</h2>
+          </div>
+          <div class="col-auto">
+            <button class="btn btn-primary" id="addNewBtn"><i class="bi bi-plus-lg"></i> New Compilation</button>
+          </div>
+        </div>
+        <div id="linksList" class="row"></div>
+        <!-- Add/Edit Modal -->
+        <div class="modal fade" id="linkModal" tabindex="-1">
+          <div class="modal-dialog">
+            <div class="modal-content">
+              <div class="modal-header">
+                <h5 class="modal-title" id="modalTitle">Compile Website</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+              </div>
+              <div class="modal-body">
+                <form id="linkForm">
+                  <div class="mb-3">
+                    <label class="form-label">Website URL</label>
+                    <input type="url" class="form-control" id="originalUrl" placeholder="https://example.com" required>
+                  </div>
+                </form>
+              </div>
+              <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-primary" id="saveLinkBtn">Compile & Save</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      `;
+
+      const linksListDiv = document.getElementById('linksList');
+      const linkModal = new bootstrap.Modal(document.getElementById('linkModal'));
+      const modalTitle = document.getElementById('modalTitle');
+      const originalUrlInput = document.getElementById('originalUrl');
+      const saveBtn = document.getElementById('saveLinkBtn');
+      let editingId = null;
+
+      // Load user's links
+      const userLinksRef = db.ref(`compiledSites/${currentUser.uid}`);
+      userLinksRef.on('value', snapshot => {
+        const data = snapshot.val() || {};
+        const keys = Object.keys(data);
+        if (keys.length === 0) {
+          linksListDiv.innerHTML = `<div class="col-12 text-center text-muted py-5">No compiled links yet. Click "New Compilation" to start.</div>`;
+          return;
+        }
+        let html = '';
+        keys.reverse().forEach(key => {
+          const item = data[key];
+          const compiledUrl = `${window.location.origin}/#/view/${key}`;
+          html += `
+            <div class="col-md-6 col-lg-4">
+              <div class="link-item">
+                <div class="d-flex justify-content-between align-items-start mb-2">
+                  <small class="text-muted text-truncate" style="max-width: 70%;">${item.originalUrl}</small>
+                  <div>
+                    <button class="btn btn-sm btn-outline-secondary edit-btn" data-id="${key}" data-url="${item.originalUrl}"><i class="bi bi-pencil"></i></button>
+                    <button class="btn btn-sm btn-outline-danger delete-btn" data-id="${key}"><i class="bi bi-trash"></i></button>
+                  </div>
+                </div>
+                <div class="compiled-url mb-2">${compiledUrl}</div>
+                <div class="d-flex justify-content-between">
+                  <button class="btn btn-sm btn-outline-primary copy-btn" data-url="${compiledUrl}"><i class="bi bi-copy"></i> Copy</button>
+                  <a href="${compiledUrl}" target="_blank" class="btn btn-sm btn-primary">Open</a>
+                </div>
+              </div>
+            </div>
+          `;
+        });
+        linksListDiv.innerHTML = html;
+
+        // Attach event listeners
+        document.querySelectorAll('.edit-btn').forEach(btn => {
+          btn.addEventListener('click', () => {
+            editingId = btn.dataset.id;
+            modalTitle.textContent = 'Edit Compilation';
+            originalUrlInput.value = btn.dataset.url;
+            linkModal.show();
+          });
+        });
+        document.querySelectorAll('.delete-btn').forEach(btn => {
+          btn.addEventListener('click', async () => {
+            if (confirm('Delete this compiled link?')) {
+              await db.ref(`compiledSites/${currentUser.uid}/${btn.dataset.id}`).remove();
+            }
+          });
+        });
+        document.querySelectorAll('.copy-btn').forEach(btn => {
+          btn.addEventListener('click', () => {
+            navigator.clipboard.writeText(btn.dataset.url).then(() => {
+              const originalHTML = btn.innerHTML;
+              btn.innerHTML = '<i class="bi bi-check"></i> Copied!';
+              setTimeout(() => btn.innerHTML = originalHTML, 2000);
+            });
+          });
+        });
+      });
+
+      // New compilation button
+      document.getElementById('addNewBtn').addEventListener('click', () => {
+        editingId = null;
+        modalTitle.textContent = 'Compile Website';
+        originalUrlInput.value = '';
+        linkModal.show();
+      });
+
+      // Save button inside modal
+      saveBtn.addEventListener('click', async () => {
+        const url = originalUrlInput.value.trim();
+        if (!url) return alert('Please enter a URL');
+
+        showLoading(true);
+        try {
+          const compiledContent = await fetchAndCompile(url);
+          const siteData = {
+            originalUrl: url,
+            compiledContent: compiledContent,
+            createdAt: firebase.database.ServerValue.TIMESTAMP
+          };
+
+          if (editingId) {
+            // Update existing
+            await db.ref(`compiledSites/${currentUser.uid}/${editingId}`).update(siteData);
+          } else {
+            // Create new
+            await db.ref(`compiledSites/${currentUser.uid}`).push(siteData);
+          }
+          linkModal.hide();
+        } catch (err) {
+          alert('Compilation failed: ' + err.message);
+        } finally {
+          showLoading(false);
+        }
+      });
+    }
+
+    // ==================== COMPILATION LOGIC ====================
+    async function fetchAndCompile(url) {
+      // Use a CORS proxy (public, for demo purposes)
+      // For production, deploy your own proxy (e.g., Cloudflare Worker)
+      const proxyUrl = 'https://api.allorigins.win/raw?url=';
+      const response = await fetch(proxyUrl + encodeURIComponent(url));
+      if (!response.ok) throw new Error('Failed to fetch the website');
+      const html = await response.text();
+      // Encode to base64 for safe storage & later injection
+      return btoa(unescape(encodeURIComponent(html)));
+    }
+
+    // ==================== VIEW PAGE (hides source) ====================
+    function renderViewPage(siteId) {
+      // Show loading state briefly
+      mainContainer.innerHTML = `
+        <div class="text-center mt-5">
+          <div class="spinner-border text-primary" role="status"></div>
+          <p class="mt-2">Loading compiled site...</p>
+        </div>
+      `;
+
+      // Fetch the compiled content (public read allowed)
+      db.ref(`compiledSites`).once('value')
+        .then(snapshot => {
+          const allData = snapshot.val() || {};
+          // find the entry with matching siteId
+          let compiledHTML = null;
+          for (const uid in allData) {
+            if (allData[uid][siteId]) {
+              compiledHTML = allData[uid][siteId].compiledContent;
+              break;
+            }
+          }
+          if (!compiledHTML) {
+            mainContainer.innerHTML = `<div class="alert alert-danger mt-5">Compiled site not found.</div>`;
+            return;
+          }
+
+          // Decode base64 and replace the entire document
+          const decoded = decodeURIComponent(escape(atob(compiledHTML)));
+          document.open();
+          document.write(decoded);
+          document.close();
+        })
+        .catch(err => {
+          mainContainer.innerHTML = `<div class="alert alert-danger mt-5">Error: ${err.message}</div>`;
+        });
+    }
+  </script>
+  <!-- Bootstrap JS bundle for modals, etc. -->
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>
